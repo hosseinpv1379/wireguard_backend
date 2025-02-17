@@ -53,16 +53,17 @@ AllowedIPs = {ip_address}/32
 
     def _generate_client_config(self, private_key: str, ip_address: str) -> str:
         """تولید کانفیگ کلاینت"""
+        config = Config()  # Create instance to access properties
         return f"""[Interface]
-PrivateKey = {private_key}
-Address = {ip_address}/24
-DNS = 8.8.8.8
+    PrivateKey = {private_key}
+    Address = {ip_address}/24
+    DNS = 8.8.8.8
 
-[Peer]
-PublicKey = {Config.SERVER_PUBLIC_KEY}
-Endpoint = {Config.SERVER_ENDPOINT}:{Config.SERVER_PORT}
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25"""
+    [Peer]
+    PublicKey = {config.SERVER_PUBLIC_KEY}
+    Endpoint = {Config.SERVER_ENDPOINT}:{Config.SERVER_PORT}
+    AllowedIPs = 0.0.0.0/0
+    PersistentKeepalive = 25"""
 
     def get_peer(self, public_key: str) -> Optional[Peer]:
         peers = self.get_all_peers()
