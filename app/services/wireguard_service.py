@@ -32,6 +32,14 @@ AllowedIPs = {ip_address}/32
 
     def create_peer(self) -> Optional[dict]:
         try:
+            # نگهداری کانفیگ اصلی interface
+            interface_config = ""
+            current_config = self._read_config()
+            if "[Interface]" in current_config:
+                interface_parts = current_config.split("# Peers will be added below this line")
+                if len(interface_parts) > 0:
+                    interface_config = interface_parts[0] + "# Peers will be added below this line\n\n"
+            
             # Generate keys
             private_key = subprocess.check_output(['wg', 'genkey']).decode().strip()
             public_key = subprocess.check_output(
@@ -52,7 +60,10 @@ AllowedIPs = {ip_address}/32
             peer_config = self._generate_peer_config(public_key, ip_address)
             
             # Add to config file
-            new_config = cleaned_config + "\n" + peer_config
+            if interface_config:
+                new_config = interface_config + peer_config
+            else:
+                new_config = cleaned_config + "\n" + peer_config
             self._write_config(new_config)
             
             # Apply changes
