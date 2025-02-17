@@ -22,8 +22,8 @@ sudo yum install wireguard-tools
 
 ### 2. کلون پروژه
 ```bash
-git clone https://your-repository-url/wireguard-api.git
-cd wireguard-api
+git clone https://github.com/hosseinpv1379/wireguard_backend.git
+cd wireguard_backend
 ```
 
 ### 3. ایجاد و فعال‌سازی محیط مجازی
