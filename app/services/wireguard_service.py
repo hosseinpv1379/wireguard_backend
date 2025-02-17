@@ -1,4 +1,3 @@
-# app/services/wireguard_service.py
 import subprocess
 from typing import List, Optional
 import re
@@ -22,12 +21,21 @@ class WireguardService:
         with open(Config.WG_CONFIG_PATH, 'w') as f:
             f.write(content)
 
+    def _generate_peer_config(self, public_key: str, ip_address: str) -> str:
+        """تولید کانفیگ peer با فرمت صحیح"""
+        return f"""# BEGIN_PEER {public_key}
+[Peer]
+PublicKey = {public_key}
+AllowedIPs = {ip_address}/32
+# END_PEER {public_key}
+"""
+
     def create_peer(self) -> Optional[dict]:
         try:
             # Generate keys
             private_key = subprocess.check_output(['wg', 'genkey']).decode().strip()
             public_key = subprocess.check_output(
-                ['echo', private_key, '|', 'wg', 'pubkey'], 
+                ['echo', f"{private_key}", '|', 'wg', 'pubkey'], 
                 shell=True
             ).decode().strip()
 
@@ -36,12 +44,15 @@ class WireguardService:
             if not ip_address:
                 raise Exception("No available IPs")
 
-            # Create peer configuration
+            # Read current config and remove any duplicate peer entries
+            current_config = self._read_config()
+            cleaned_config = self._remove_existing_peer(current_config, ip_address)
+            
+            # Generate new peer config
             peer_config = self._generate_peer_config(public_key, ip_address)
             
             # Add to config file
-            current_config = self._read_config()
-            new_config = current_config + peer_config
+            new_config = cleaned_config + "\n" + peer_config
             self._write_config(new_config)
             
             # Apply changes
@@ -61,16 +72,28 @@ class WireguardService:
                 self.ip_service.release_ip(ip_address)
             raise
 
-    def _generate_peer_config(self, public_key: str, ip_address: str) -> str:
-        return f'''
-[Peer]
-PublicKey = {public_key}
-AllowedIPs = {ip_address}/32
-'''
+    def _remove_existing_peer(self, config: str, ip_address: str) -> str:
+        """حذف peer های تکراری از کانفیگ"""
+        # حذف peer های با IP یکسان
+        lines = config.split('\n')
+        cleaned_lines = []
+        skip = False
+        
+        for line in lines:
+            if line.startswith('# BEGIN_PEER'):
+                skip = False
+            elif line.strip() == f'AllowedIPs = {ip_address}/32':
+                skip = True
+                continue
+                
+            if not skip:
+                cleaned_lines.append(line)
+                
+        return '\n'.join(cleaned_lines)
 
     def _generate_client_config(self, private_key: str, ip_address: str) -> str:
-        return f'''
-[Interface]
+        """تولید کانفیگ کلاینت"""
+        return f"""[Interface]
 PrivateKey = {private_key}
 Address = {ip_address}/24
 DNS = 8.8.8.8
@@ -79,8 +102,7 @@ DNS = 8.8.8.8
 PublicKey = {Config.SERVER_PUBLIC_KEY}
 Endpoint = {Config.SERVER_ENDPOINT}:{Config.SERVER_PORT}
 AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-'''
+PersistentKeepalive = 25"""
 
     def get_peer(self, public_key: str) -> Optional[Peer]:
         peers = self.get_all_peers()
@@ -94,14 +116,15 @@ PersistentKeepalive = 25
             for line in output.split('\n')[1:]:  # Skip first line (interface)
                 if line:
                     parts = line.split('\t')
-                    peer = Peer(
-                        public_key=parts[0],
-                        ip_address=parts[3].split('/')[0],
-                        last_handshake=datetime.fromtimestamp(int(parts[4])) if parts[4] != '0' else None,
-                        transfer_rx=int(parts[5]),
-                        transfer_tx=int(parts[6])
-                    )
-                    peers.append(peer)
+                    if len(parts) >= 7:  # Make sure we have all required fields
+                        peer = Peer(
+                            public_key=parts[0],
+                            ip_address=parts[3].split('/')[0],
+                            last_handshake=datetime.fromtimestamp(int(parts[4])) if parts[4] != '0' else None,
+                            transfer_rx=int(parts[5]),
+                            transfer_tx=int(parts[6])
+                        )
+                        peers.append(peer)
                     
             return peers
             
@@ -120,11 +143,11 @@ PersistentKeepalive = 25
             
             # Remove from config file
             config = self._read_config()
-            peer_pattern = re.compile(
-                rf'\[Peer\].*?PublicKey = {public_key}.*?(?=\[Peer\]|\Z)',
+            pattern = re.compile(
+                rf'# BEGIN_PEER {public_key}.*?# END_PEER {public_key}\n?',
                 re.DOTALL
             )
-            new_config = peer_pattern.sub('', config)
+            new_config = pattern.sub('', config)
             self._write_config(new_config)
             
             # Release IP
@@ -139,5 +162,5 @@ PersistentKeepalive = 25
             return False
 
     def _apply_changes(self):
+        """اعمال تغییرات روی سرویس وایرگارد"""
         subprocess.run(['systemctl', 'restart', f'wg-quick@{Config.WG_INTERFACE}'])
-
