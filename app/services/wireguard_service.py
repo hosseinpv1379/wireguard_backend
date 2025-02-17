@@ -30,58 +30,7 @@ AllowedIPs = {ip_address}/32
 # END_PEER {public_key}
 """
 
-    def create_peer(self) -> Optional[dict]:
-        try:
-            # نگهداری کانفیگ اصلی interface
-            interface_config = ""
-            current_config = self._read_config()
-            if "[Interface]" in current_config:
-                interface_parts = current_config.split("# Peers will be added below this line")
-                if len(interface_parts) > 0:
-                    interface_config = interface_parts[0] + "# Peers will be added below this line\n\n"
-            
-            # Generate keys
-            private_key = subprocess.check_output(['wg', 'genkey']).decode().strip()
-            public_key = subprocess.check_output(
-                ['echo', f"{private_key}", '|', 'wg', 'pubkey'], 
-                shell=True
-            ).decode().strip()
 
-            # Get next available IP
-            ip_address = self.ip_service.get_next_available_ip()
-            if not ip_address:
-                raise Exception("No available IPs")
-
-            # Read current config and remove any duplicate peer entries
-            current_config = self._read_config()
-            cleaned_config = self._remove_existing_peer(current_config, ip_address)
-            
-            # Generate new peer config
-            peer_config = self._generate_peer_config(public_key, ip_address)
-            
-            # Add to config file
-            if interface_config:
-                new_config = interface_config + peer_config
-            else:
-                new_config = cleaned_config + "\n" + peer_config
-            self._write_config(new_config)
-            
-            # Apply changes
-            self._apply_changes()
-            
-            # Generate client config
-            client_config = self._generate_client_config(private_key, ip_address)
-            
-            return {
-                'public_key': public_key,
-                'ip_address': ip_address,
-                'client_config': client_config
-            }
-        
-        except Exception as e:
-            if 'ip_address' in locals():
-                self.ip_service.release_ip(ip_address)
-            raise
 
     def _remove_existing_peer(self, config: str, ip_address: str) -> str:
         """حذف peer های تکراری از کانفیگ"""
@@ -175,3 +124,62 @@ PersistentKeepalive = 25"""
     def _apply_changes(self):
         """اعمال تغییرات روی سرویس وایرگارد"""
         subprocess.run(['systemctl', 'restart', f'wg-quick@{Config.WG_INTERFACE}'])
+    def create_peer(self) -> Optional[dict]:
+        try:
+            # Generate private key properly
+            process = subprocess.Popen(['wg', 'genkey'], stdout=subprocess.PIPE)
+            private_key = process.stdout.read().decode('utf-8').strip()
+
+            # Generate public key from private key
+            process = subprocess.Popen(['wg', 'pubkey'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            public_key = process.communicate(input=private_key.encode())[0].decode('utf-8').strip()
+
+            # Get next available IP
+            ip_address = self.ip_service.get_next_available_ip()
+            if not ip_address:
+                raise Exception("No available IPs")
+
+            # Generate peer config
+            peer_config = f"""# BEGIN_PEER {public_key}
+    [Peer]
+    PublicKey = {public_key}
+    AllowedIPs = {ip_address}/32
+    # END_PEER {public_key}
+    """
+            # Read and update config
+            current_config = self._read_config()
+            if "[Interface]" in current_config:
+                parts = current_config.split("# Peers will be added below this line")
+                base_config = parts[0] + "# Peers will be added below this line\n\n"
+                
+                # Get existing peers part if any
+                existing_peers = ""
+                if len(parts) > 1:
+                    existing_peers = parts[1]
+                
+                # Remove any duplicate peer configs
+                if existing_peers:
+                    existing_peers = self._remove_existing_peer(existing_peers, ip_address)
+                
+                # Combine all parts
+                new_config = base_config + existing_peers + peer_config
+            else:
+                new_config = current_config + "\n" + peer_config
+
+            # Write config and apply changes
+            self._write_config(new_config)
+            self._apply_changes()
+
+            # Generate client config
+            client_config = self._generate_client_config(private_key, ip_address)
+
+            return {
+                'public_key': public_key,
+                'ip_address': ip_address,
+                'client_config': client_config
+            }
+
+        except Exception as e:
+            if 'ip_address' in locals():
+                self.ip_service.release_ip(ip_address)
+            raise
